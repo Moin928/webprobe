@@ -13,7 +13,7 @@ public class LinkExtractor {
         List<String> links = new ArrayList<>();
 
         // select every <a> element that contains an href attribute
-        Elements elements = document.select("a[href");
+        Elements elements = document.select("a[href]");
 
         for (Element element : elements) {
 
