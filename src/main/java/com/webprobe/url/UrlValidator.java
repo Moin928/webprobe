@@ -2,21 +2,18 @@ package com.webprobe.url;
 
 import java.net.URI;
 
-public class UrlValidator{
-    
-    public boolean isValid(
-        String url
-    ) {
-        try{
+public class UrlValidator {
 
-        URI uri = URI.create(url);
+    public boolean isValid(String url) {
+        try {
 
-        return uri.getScheme() != null
-        && (uri.getScheme().equalsIgnoreCase("http")
-        || uri.getScheme().equalsIgnoreCase("https")
-        );
+            URI uri = URI.create(url);
 
-        } catch (IllegalStateException e) {
+            return uri.getScheme() != null
+                    && (uri.getScheme().equalsIgnoreCase("http")
+                    || uri.getScheme().equalsIgnoreCase("https"));
+
+        } catch (IllegalArgumentException e) {
             return false;
         }
     }
