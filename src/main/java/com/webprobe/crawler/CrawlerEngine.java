@@ -1,8 +1,11 @@
 package com.webprobe.crawler;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import com.webprobe.processing.HtmlParser;
 import com.webprobe.processing.LinkExtractor;
 import com.webprobe.processing.NewUrlDispatcher;
+import com.webprobe.robots.RobotsTxtChecker;
 import com.webprobe.url.SeenUrlRegistry;
 import com.webprobe.url.UrlFrontier;
 import com.webprobe.url.UrlNormalizer;
@@ -14,11 +17,19 @@ public class CrawlerEngine {
     private final UrlFrontier urlFrontier;
     private final WorkerPool workerPool;
     private final CrawlWorker worker;
+    private final AtomicInteger pagesCrawled;
 
-    public CrawlerEngine( int workerCount, HttpDownloader httpDownloader) {
+    public CrawlerEngine( 
+        int workerCount, 
+        int maxPages,
+        String userAgent,
+        int delayMs,
+        boolean respectRobots,
+        HttpDownloader httpDownloader) {
 
         //shared url queue used by all workers
         this.urlFrontier = new UrlFrontier();
+        this.pagesCrawled = new AtomicInteger();
 
         //tracks urls that have already ben claimed
         SeenUrlRegistry seenUrlRegistry = new SeenUrlRegistry();
@@ -30,6 +41,13 @@ public class CrawlerEngine {
         //html processing components
         HtmlParser htmlParser = new HtmlParser();
         LinkExtractor linkExtractor = new LinkExtractor();
+        
+
+        RobotsTxtChecker robotsTxtChecker =  null;
+        if (respectRobots) {
+            robotsTxtChecker = new RobotsTxtChecker(userAgent);
+        }
+        
 
         // sends discovered urls back into the frontier 
         NewUrlDispatcher newUrlDispatcher = new NewUrlDispatcher(
@@ -45,7 +63,11 @@ public class CrawlerEngine {
             httpDownloader,
             htmlParser,
             linkExtractor,
-            newUrlDispatcher
+            newUrlDispatcher,
+            pagesCrawled,
+            maxPages,
+            delayMs,
+            robotsTxtChecker
         );
         
 
