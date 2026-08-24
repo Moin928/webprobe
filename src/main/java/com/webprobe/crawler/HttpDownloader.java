@@ -23,11 +23,12 @@ public class HttpDownloader {
                 config.getConnectionTimeout()
             )
         )
-        .followRedirects(HttpClient.Redirect.NORMAL)
+        .followRedirects(HttpClient.Redirect.ALWAYS)
         .build();
     }
 
     public String download(String url) throws IOException, InterruptedException {
+        
         HttpRequest request = HttpRequest.newBuilder()
         .uri(URI.create(url))
         .timeout(
@@ -48,6 +49,17 @@ public class HttpDownloader {
 
         // only return the page if server reports success
         if (response.statusCode() >= 200 && response.statusCode() < 300) {
+
+            String contentType = response.headers()
+            .firstValue("Content-Type")
+            .orElse("");
+
+            if (!contentType.toLowerCase().contains("text/html")) {
+                throw new IOException(
+                    "Skipping non-HTML content: " + contentType
+                );
+            }
+
             return response.body();
         }
 
