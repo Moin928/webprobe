@@ -2,6 +2,7 @@ package com.webprobe.url;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 public class UrlFrontier {
 
@@ -18,7 +19,7 @@ public class UrlFrontier {
     public UrlTask take() throws InterruptedException{
 
         // wait tilla task is available then remove and retrun the task
-        return queue.take();
+        return queue.poll(500, TimeUnit.MILLISECONDS);
     }
 
     public int task() {
