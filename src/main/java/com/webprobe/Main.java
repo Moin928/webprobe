@@ -19,11 +19,15 @@ public class Main {
         // create the crawler engine
         CrawlerEngine crawlerEngine = new CrawlerEngine(
             config.getWorkerCount(),
+            config.getMaxPages(),
+            config.getUserAgent(),
+            config.getDelayMs(),
+            config.isRespectRobots(),
             httpDownloader
         );
 
         //giving the url
-        crawlerEngine.submit("https://example.com");
+        crawlerEngine.submit("https://en.wikipedia.org/wiki/Web_crawler");
 
         crawlerEngine.start();
     }
