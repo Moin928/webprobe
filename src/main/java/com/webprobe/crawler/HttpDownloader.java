@@ -27,7 +27,7 @@ public class HttpDownloader {
         .build();
     }
 
-    public String download(String url) throws IOException, InterruptedException {
+    public DownloadResult download(String url) throws IOException, InterruptedException {
         
         HttpRequest request = HttpRequest.newBuilder()
         .uri(URI.create(url))
@@ -54,13 +54,11 @@ public class HttpDownloader {
             .firstValue("Content-Type")
             .orElse("");
 
-            if (!contentType.toLowerCase().contains("text/html")) {
-                throw new IOException(
-                    "Skipping non-HTML content: " + contentType
-                );
-            }
-
-            return response.body();
+            return new DownloadResult(
+                response.body(),
+                response.statusCode(),
+                contentType
+            );
         }
 
         throw new IOException(
