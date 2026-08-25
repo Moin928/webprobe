@@ -20,6 +20,7 @@ public class Main {
         CrawlerEngine crawlerEngine = new CrawlerEngine(
             config.getWorkerCount(),
             config.getMaxPages(),
+            config.getMaxDepth(),
             config.getUserAgent(),
             config.getDelayMs(),
             config.isRespectRobots(),
