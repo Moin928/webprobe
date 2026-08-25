@@ -1,5 +1,6 @@
 package com.webprobe.crawler;
 
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jsoup.nodes.Document;
@@ -19,7 +20,8 @@ public class CrawlWorker implements Runnable{
     private final LinkExtractor linkExtractor;
     private final NewUrlDispatcher newUrlDispatcher;
     private final AtomicInteger pagesCrawled;
-    private final int maxPages;
+    private final Semaphore crawlSlots;
+    private final int maxDepth;
     private final int delayMs;
     private final RobotsTxtChecker robotsTxtChecker;
 
@@ -30,7 +32,8 @@ public class CrawlWorker implements Runnable{
         LinkExtractor linkExtractor,
         NewUrlDispatcher newUrlDispatcher,
         AtomicInteger pagesCrawled,
-        int maxPages,
+        Semaphore crawlSlots,
+        int maxDepth,
         int delayMs,
         RobotsTxtChecker robotsTxtChecker
     ) {
@@ -40,7 +43,8 @@ public class CrawlWorker implements Runnable{
         this.linkExtractor = linkExtractor;
         this.newUrlDispatcher = newUrlDispatcher;
         this.pagesCrawled = pagesCrawled;
-        this.maxPages = maxPages;
+        this.crawlSlots = crawlSlots;
+        this.maxDepth = maxDepth;
         this.delayMs = delayMs;
         this.robotsTxtChecker = robotsTxtChecker;
     }
@@ -49,28 +53,27 @@ public class CrawlWorker implements Runnable{
     public void run() {
         while (!Thread.currentThread().isInterrupted()) {
             
+            boolean slotAcquired = false;
             try{
                 // wait untill a url is available in the frontier
                 UrlTask task = urlFrontier.take();
 
                 if (task == null) {
-                    
-                    if (pagesCrawled.get() >= maxPages) {
-                        break;
-                    }
 
                     continue;
                 }
-                
-                int pageNumber = pagesCrawled.incrementAndGet();
 
-                if (pageNumber > maxPages) {
+                if (task.depth() > maxDepth) {
+                    continue;
+                }
+                
+                if (!crawlSlots.tryAcquire()) {
                     break;
                 }
 
-                System.out.println(
-                    "Crawling[" + pageNumber + "/" + maxPages + "]:" + task
-                );
+                slotAcquired = true;
+
+                System.out.println("Attempting crawl: "+ task);
 
                 if (robotsTxtChecker != null && !robotsTxtChecker.isAllowed(task.url())) {
                     System.out.println(
@@ -80,14 +83,28 @@ public class CrawlWorker implements Runnable{
                 }
 
                 //download the page
-                String html = httpDownloader.download(task.url());
+                DownloadResult result = httpDownloader.download(task.url());
+
+                if (!result.contentType().toLowerCase().startsWith("text/html")) {
+                    System.out.println(
+                        "Skipping non-HTML content: "
+                        + result.contentType()
+                        + " " + task.url()
+                    );
+                    continue;
+                }
+
+                String html = result.body();
+
+                int pageNumber = pagesCrawled.incrementAndGet();
+                slotAcquired = false;
 
                 System.out.println(
-                    "Successfully crawled [" + pageNumber + "/" + maxPages + "] " + task
+                    "Successfully crawled [" + pageNumber + "] " + task
                 );
 
                 // convert html into a jsoup document
-                Document document = htmlParser.parse(html, task.url());
+                Document document = htmlParser.parse(html,task.url());
 
                 // Extract links from the page
                 var links = linkExtractor.extract(document);
@@ -110,6 +127,10 @@ public class CrawlWorker implements Runnable{
 
                 System.out.println("Failed to crawl page: "+ e.getMessage());
                 
+            } finally {
+                if (slotAcquired) {
+                    crawlSlots.release();
+                }
             }
         }
     }
