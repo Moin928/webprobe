@@ -1,11 +1,14 @@
 package com.webprobe.crawler;
 
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.webprobe.processing.HtmlParser;
 import com.webprobe.processing.LinkExtractor;
 import com.webprobe.processing.NewUrlDispatcher;
+
 import com.webprobe.robots.RobotsTxtChecker;
+
 import com.webprobe.url.SeenUrlRegistry;
 import com.webprobe.url.UrlFrontier;
 import com.webprobe.url.UrlNormalizer;
@@ -22,6 +25,7 @@ public class CrawlerEngine {
     public CrawlerEngine( 
         int workerCount, 
         int maxPages,
+        int maxDepth,
         String userAgent,
         int delayMs,
         boolean respectRobots,
@@ -41,6 +45,8 @@ public class CrawlerEngine {
         //html processing components
         HtmlParser htmlParser = new HtmlParser();
         LinkExtractor linkExtractor = new LinkExtractor();
+
+        Semaphore crawlSlots = new Semaphore(maxPages);
         
 
         RobotsTxtChecker robotsTxtChecker =  null;
@@ -65,7 +71,8 @@ public class CrawlerEngine {
             linkExtractor,
             newUrlDispatcher,
             pagesCrawled,
-            maxPages,
+            crawlSlots,
+            maxDepth,
             delayMs,
             robotsTxtChecker
         );
