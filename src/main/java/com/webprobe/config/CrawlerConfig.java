@@ -6,7 +6,8 @@ import lombok.RequiredArgsConstructor;
 @Getter
 @RequiredArgsConstructor
 public class CrawlerConfig {
-    
+
+    // these values describe how the whole crawler should behave
     private final int maxPages;
     private final int maxDepth;
     private final int workerCount;
@@ -15,5 +16,4 @@ public class CrawlerConfig {
     private final String userAgent;
     private final boolean respectRobots;
     private final int delayMs;
-
 }
