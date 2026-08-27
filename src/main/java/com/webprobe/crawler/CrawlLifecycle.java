@@ -10,22 +10,28 @@ public class CrawlLifecycle {
 
     private final Object completionMonitor;
 
+    private boolean crawlLimitReached;
+
     public CrawlLifecycle() {
 
         // counts tasks that are currently waiting in the frontier
         this.pendingTasks = new AtomicInteger();
 
-        // counts tasks that workers are currently processing
+        // counts workers that are currently processing a task
         this.activeWorkers = new AtomicInteger();
 
-        // used to wake up the thread that is waiting for the crawl to finish
+        // used to wake the thread waiting for the crawl to finish
         this.completionMonitor = new Object();
+
+        // the crawl has not reached its limit yet
+        this.crawlLimitReached = false;
     }
 
     public void taskAdded() {
 
         // a new task is entering the crawler so the pending count goes up
         synchronized (completionMonitor) {
+
             pendingTasks.incrementAndGet();
         }
     }
@@ -34,7 +40,9 @@ public class CrawlLifecycle {
 
         // the worker has taken the task so it is no longer waiting
         synchronized (completionMonitor) {
+
             pendingTasks.decrementAndGet();
+
             activeWorkers.incrementAndGet();
         }
     }
@@ -46,9 +54,23 @@ public class CrawlLifecycle {
 
             activeWorkers.decrementAndGet();
 
-            // only wake the waiting thread when all crawl work is actually done
-            if (pendingTasks.get() == 0
-                    && activeWorkers.get() == 0) {
+            // wake up the waiting thread if the crawl can now finish
+            if (isFinished()) {
+
+                completionMonitor.notifyAll();
+            }
+        }
+    }
+
+    public void crawlLimitReached() {
+
+        // no more urls should be processed because the page budget is used up
+        synchronized (completionMonitor) {
+
+            crawlLimitReached = true;
+
+            // wake up the waiting thread if no workers are still active
+            if (isFinished()) {
 
                 completionMonitor.notifyAll();
             }
@@ -57,18 +79,27 @@ public class CrawlLifecycle {
 
     public boolean isFinished() {
 
-        // both waiting work and active work must be gone
-        return pendingTasks.get() == 0
+        // normal completion means there is no waiting or active work
+        boolean noWorkLeft =
+            pendingTasks.get() == 0
             && activeWorkers.get() == 0;
+
+        // once the crawl limit is reached queued urls dont need to be processed
+        boolean limitReachedWithNoActiveWorkers =
+            crawlLimitReached
+            && activeWorkers.get() == 0;
+
+        return noWorkLeft || limitReachedWithNoActiveWorkers;
     }
 
     public void awaitCompletion()
             throws InterruptedException {
 
-        // wait until there is no pending or active crawl work
+        // wait until the crawl has either finished normally or hit its limit
         synchronized (completionMonitor) {
 
             while (!isFinished()) {
+
                 completionMonitor.wait();
             }
         }
@@ -84,5 +115,14 @@ public class CrawlLifecycle {
 
         // useful when checking how many workers are currently processing
         return activeWorkers.get();
+    }
+
+    public boolean isCrawlLimitReached() {
+
+        // tells us if the crawler has reached its configured page limit
+        synchronized (completionMonitor) {
+
+            return crawlLimitReached;
+        }
     }
 }
