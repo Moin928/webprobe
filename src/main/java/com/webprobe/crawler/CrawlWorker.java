@@ -1,9 +1,11 @@
 package com.webprobe.crawler;
 
-import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Instant;
 
 import org.jsoup.nodes.Document;
 
+import com.webprobe.output.CrawlResult;
+import com.webprobe.output.CrawlResultWriter;
 import com.webprobe.processing.HtmlParser;
 import com.webprobe.processing.LinkExtractor;
 import com.webprobe.processing.NewUrlDispatcher;
@@ -14,71 +16,111 @@ import com.webprobe.url.UrlTask;
 public class CrawlWorker implements Runnable {
 
     private final UrlFrontier urlFrontier;
+
     private final HttpDownloader httpDownloader;
+
     private final HtmlParser htmlParser;
+
     private final LinkExtractor linkExtractor;
+
     private final NewUrlDispatcher newUrlDispatcher;
-    private final AtomicInteger pagesCrawled;
+
     private final int maxDepth;
+
     private final int delayMs;
+
     private final RobotsTxtChecker robotsTxtChecker;
+
     private final CrawlBudget crawlBudget;
+
     private final CrawlLifecycle crawlLifecycle;
 
+    private final CrawlResultWriter crawlResultWriter;
+
+    private final CrawlStats crawlStats;
+
     public CrawlWorker(
+
         UrlFrontier urlFrontier,
+
         HttpDownloader httpDownloader,
+
         HtmlParser htmlParser,
+
         LinkExtractor linkExtractor,
+
         NewUrlDispatcher newUrlDispatcher,
-        AtomicInteger pagesCrawled,
+
         int maxDepth,
+
         int delayMs,
+
         RobotsTxtChecker robotsTxtChecker,
+
         CrawlLifecycle crawlLifecycle,
-        CrawlBudget crawlBudget
+
+        CrawlBudget crawlBudget,
+
+        CrawlResultWriter crawlResultWriter,
+
+        CrawlStats crawlStats
+
     ) {
+
         this.urlFrontier = urlFrontier;
+
         this.httpDownloader = httpDownloader;
+
         this.htmlParser = htmlParser;
+
         this.linkExtractor = linkExtractor;
+
         this.newUrlDispatcher = newUrlDispatcher;
-        this.pagesCrawled = pagesCrawled;
+
         this.maxDepth = maxDepth;
+
         this.delayMs = delayMs;
+
         this.robotsTxtChecker = robotsTxtChecker;
+
         this.crawlLifecycle = crawlLifecycle;
+
         this.crawlBudget = crawlBudget;
+
+        this.crawlResultWriter = crawlResultWriter;
+
+        this.crawlStats = crawlStats;
     }
 
     @Override
     public void run() {
 
-        
-        // keep taking work until this worker gets interrupted or the budget is gone
+        // keep working untill this worker is interrupted or the crawl is finished
         while (!Thread.currentThread().isInterrupted()) {
+
             boolean taskStarted = false;
-            
+
             try {
 
-                // wait until another task is available in the shared frontier
+                // wait for another url to appear in the shared frontier
                 UrlTask task = urlFrontier.take();
 
-                // the frontier can return null when there is no work right now
                 if (task == null) {
                     continue;
                 }
 
                 taskStarted = true;
 
-                // dont follow links deeper than the configured crawl depth
+                // dont process urls deeper than the configured depth
                 if (task.depth() > maxDepth) {
                     continue;
                 }
 
-                // check robots before spending one of the crawl attempts
+                // check robots before using any crawl budget
                 if (robotsTxtChecker != null
                         && !robotsTxtChecker.isAllowed(task.url())) {
+
+                    crawlStats.robotsBlocked();
 
                     System.out.println(
                         "Blocked by robots.txt: " + task.url()
@@ -89,6 +131,10 @@ public class CrawlWorker implements Runnable {
 
                 // atomically claim one crawl attempt
                 if (!crawlBudget.tryAcquire()) {
+
+                    // tell the lifecycle that no more pages can be crawled
+                    crawlLifecycle.crawlLimitReached();
+
                     break;
                 }
 
@@ -100,47 +146,69 @@ public class CrawlWorker implements Runnable {
                 DownloadResult result =
                     httpDownloader.download(task.url());
 
-                // this worker only processes HTML pages
+                // this crawler only processes html pages
                 if (!result.contentType()
                         .toLowerCase()
                         .startsWith("text/html")) {
 
+                    crawlStats.nonHtmlSkipped();
+
                     System.out.println(
                         "Skipping non HTML content: "
                         + result.contentType()
-                        + " " + task.url()
+                        + " "
+                        + task.url()
                     );
 
                     continue;
                 }
 
-                // count the page after we know we actually received HTML
-                int pageNumber =
-                    pagesCrawled.incrementAndGet();
-
-                System.out.println(
-                    "Successfully crawled ["
-                    + pageNumber
-                    + "] "
-                    + task
-                );
-
-                // turn the downloaded html into a document we can inspect
+                // turn the downloaded html into a jsoup document
                 Document document =
                     htmlParser.parse(
                         result.body(),
                         task.url()
                     );
 
-                // find all links that were present on the page
+                // find all links contained in this page
                 var links =
                     linkExtractor.extract(document);
 
+                // record how many links were found on this page
+                crawlStats.urlsDiscovered(links.size());
+
+                // count the page after it has been processed as html
+                crawlStats.pageCrawled();
+
                 System.out.println(
-                    "Found: " + links.size() + " links"
+                    "Successfully crawled ["
+                    + crawlStats.getPagesCrawled()
+                    + "] "
+                    + task
                 );
 
-                // send the new links back through validation and deduplication
+                System.out.println(
+                    "Found: "
+                    + links.size()
+                    + " links"
+                );
+
+                // collect the useful information from the crawled page
+                CrawlResult crawlResult =
+                    new CrawlResult(
+                        task.url(),
+                        task.depth(),
+                        result.statusCode(),
+                        result.contentType(),
+                        document.title(),
+                        links,
+                        Instant.now()
+                    );
+
+                // save the result before moving on to more urls
+                crawlResultWriter.write(crawlResult);
+
+                // send discovered urls through validation and deduplication
                 newUrlDispatcher.dispatch(
                     links,
                     task.depth() + 1
@@ -151,16 +219,22 @@ public class CrawlWorker implements Runnable {
 
             } catch (InterruptedException e) {
 
-                // restore the interrupt flag so the worker can stop cleanly
+                // restore the interrupt flag so this worker can stop cleanly
                 Thread.currentThread().interrupt();
 
             } catch (Exception e) {
 
-                // one bad page shouldnt kill the whole crawler
+                // record failures without killing the whole crawler
+                crawlStats.pageFailed();
+
                 System.out.println(
-                    "Failed to crawl page: " + e.getMessage()
+                    "Failed to crawl page: "
+                    + e.getMessage()
                 );
+
             } finally {
+
+                // tell the lifecycle that this worker is done with its task
                 if (taskStarted) {
                     crawlLifecycle.taskFinished();
                 }
