@@ -1,7 +1,9 @@
 package com.webprobe.crawler;
 
-import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.file.Path;
 
+import com.webprobe.output.CrawlResultWriter;
+import com.webprobe.output.JsonlCrawlResultWriter;
 import com.webprobe.processing.HtmlParser;
 import com.webprobe.processing.LinkExtractor;
 import com.webprobe.processing.NewUrlDispatcher;
@@ -15,59 +17,80 @@ import com.webprobe.url.UrlValidator;
 public class CrawlerEngine {
 
     private final UrlFrontier urlFrontier;
+
     private final WorkerPool workerPool;
+
     private final CrawlWorker worker;
-    private final AtomicInteger pagesCrawled;
+
     private final CrawlBudget crawlBudget;
+
     private final CrawlLifecycle crawlLifecycle;
 
+    private final CrawlResultWriter crawlResultWriter;
+
+    private final CrawlStats crawlStats;
+
     public CrawlerEngine(
+
         int workerCount,
+
         int maxPages,
+
         int maxDepth,
+
         String userAgent,
+
         int delayMs,
+
         boolean respectRobots,
+
         HttpDownloader httpDownloader
+
     ) {
 
-        // this is the shared queue all crawler workers pull tasks from
+        // this keeps track of the whole crawl from start to finish
         this.crawlLifecycle = new CrawlLifecycle();
-        this.urlFrontier = new UrlFrontier(crawlLifecycle);
 
-        // keeps track of pages that were actually crawled successfully
-        this.pagesCrawled = new AtomicInteger();
+        // all workers share the same frontier for pending urls
+        this.urlFrontier =
+            new UrlFrontier(crawlLifecycle);
 
-        // controls the total number of crawl attempts
-        this.crawlBudget = new CrawlBudget(maxPages);
+        // controls how many crawl attempts are allowed
+        this.crawlBudget =
+            new CrawlBudget(maxPages);
 
-        // keeps duplicate urls from entering the frontier
+        // stores statistics shared by every worker
+        this.crawlStats =
+            new CrawlStats();
+
+        // keeps duplicate urls out of the crawl
         SeenUrlRegistry seenUrlRegistry =
             new SeenUrlRegistry();
 
-        // these handle urls before they reach a worker
+        // these handle url validation and normalization
         UrlValidator urlValidator =
             new UrlValidator();
 
         UrlNormalizer urlNormalizer =
             new UrlNormalizer();
 
-        // these handle the html after it has been downloaded
+        // these handle the html after it is downloaded
         HtmlParser htmlParser =
             new HtmlParser();
 
         LinkExtractor linkExtractor =
             new LinkExtractor();
 
-        // robots support can be switched off from the config
+        // robots support can be turned off from the config
         RobotsTxtChecker robotsTxtChecker = null;
 
         if (respectRobots) {
+
             robotsTxtChecker =
                 new RobotsTxtChecker(userAgent);
         }
 
-        // discovered links come back through this pipeline
+        // discovered urls are sent through validation before entering the frontier
         NewUrlDispatcher newUrlDispatcher =
             new NewUrlDispatcher(
                 urlValidator,
@@ -75,6 +98,25 @@ public class CrawlerEngine {
                 seenUrlRegistry,
                 urlFrontier
             );
+
+        // this writer stores each successful crawl result as json
+        try {
+
+            this.crawlResultWriter =
+                new JsonlCrawlResultWriter(
+                    Path.of(
+                        "output",
+                        "crawl.jsonl"
+                    )
+                );
+
+        } catch (Exception e) {
+
+            throw new IllegalStateException(
+                "Failed to create crawl result writer",
+                e
+            );
+        }
 
         // all workers share the same crawler components
         this.worker =
@@ -84,34 +126,56 @@ public class CrawlerEngine {
                 htmlParser,
                 linkExtractor,
                 newUrlDispatcher,
-                pagesCrawled,
                 maxDepth,
                 delayMs,
                 robotsTxtChecker,
                 crawlLifecycle,
-                crawlBudget
+                crawlBudget,
+                crawlResultWriter,
+                crawlStats
             );
 
-        // this controls how many workers can run at the same time
+        // controls how many crawler threads are running
         this.workerPool =
             new WorkerPool(workerCount);
     }
 
     public void start() throws InterruptedException {
 
-        // start all crawler workers using the shared worker definition
+        // start all crawler workers
         workerPool.start(worker);
 
-        // wait until there is no pending or active crawl work
-        crawlLifecycle.awaitCompletion();
+        try {
 
-        // the crawl is finished so stop the worker pool cleanly
-        workerPool.shutdown();
+            // wait until there is no more active crawl work
+            crawlLifecycle.awaitCompletion();
+
+        } finally {
+
+            // stop the workers after the crawl has finished
+            workerPool.shutdown();
+
+            // close the output file after all workers are finished
+            try {
+
+                crawlResultWriter.close();
+
+            } catch (Exception e) {
+
+                throw new IllegalStateException(
+                    "Failed to close crawl result writer",
+                    e
+                );
+            }
+        }
+
+        // print the final results after the crawl is completely finished
+        crawlStats.printSummary();
     }
 
     public void submit(String url) {
 
-        // the first url starts at depth zero
+        // the first url always starts at depth zero
         urlFrontier.submit(
             new UrlTask(url, 0)
         );
@@ -119,7 +183,20 @@ public class CrawlerEngine {
 
     public void shutdown() {
 
-        // ask the worker pool to stop accepting more work
+        // stop the worker pool when the engine is manually shut down
         workerPool.shutdown();
+
+        // close the output writer as well
+        try {
+
+            crawlResultWriter.close();
+
+        } catch (Exception e) {
+
+            throw new IllegalStateException(
+                "Failed to close crawl result writer",
+                e
+            );
+        }
     }
 }
